@@ -1,5 +1,5 @@
 ifdef DEBUG
-OPT=-g -std=c++0x
+OPT=-g #-std=c++0x
 else
 OPT=-O3 -ffast-math -funroll-loops #-std=c++0x -mtune=native -march=native
 endif
@@ -12,15 +12,19 @@ endif
 
 INCS= -I. -I$(BOOST_ROOT)/include
 LIBS =  -L$(BOOST_ROOT)/lib -L/usr/lib
-LDFLAGS = -lm -lpthread -ldl -lboost_program_options -lboost_filesystem -lboost_serialization -lpthread -lboost_thread -lboost_system
+#LDFLAGS = -lm -lpthread -ldl -lboost_program_options -lboost_filesystem -lboost_serialization -lpthread -lboost_thread -lboost_system
 
 CXX = /usr/bin/g++
 
 CXXFLAGS=$(OPTS) $(INCS)
 
 SRC_FILES = \
+  alignment_models/edit_distance.cpp \
+  alignment_models/model1.cpp \
 	alignment_models/monotonic_aligner.cpp \
 	util/math_util.cpp \
+  util/parallel_corpus.cpp \
+  util/vocab.cpp \
 	main.cpp
 	
 OBJ_FILES = $(SRC_FILES:%.cpp=%.o)
