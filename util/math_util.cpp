@@ -7,6 +7,7 @@
 double MathUtil::log_add_inc = -LOG_ADD_MIN / LOG_ADD_TABLE_SIZE;
 double MathUtil::inv_log_add_inc = LOG_ADD_TABLE_SIZE / -LOG_ADD_MIN;
 double MathUtil::log_add_table[LOG_ADD_TABLE_SIZE+1];
+bool MathUtil::use_approx = false;
 
 bool MathUtil::ApproxEqual(double a, double b, int64_t max_ulps) {
   // Infinity check
@@ -69,6 +70,31 @@ bool MathUtil::ApproxEqual(float a, float b, int32_t max_ulps) {
 }
 
 void MathUtil::InitLogTable() {
-  for(int i = 0; i <= LOG_ADD_TABLE_SIZE; i++)
+  for(int i = 0; i <= LOG_ADD_TABLE_SIZE; i++) {
     log_add_table[i] = log1p(exp((i * log_add_inc) + LOG_ADD_MIN));
+  }
+  use_approx = true;
+}
+
+double math_util::Poisson(double lambda, int k) {
+  double sum = 0;
+  for (int i = 1; i <= k; ++i) {
+    sum += log(i);
+  }
+  return exp((k * log(lambda)) - lambda - sum);
+}
+
+double math_util::Digamma(double x) {
+  double result = 0, xx, xx2, xx4;
+  assert(x > 0);
+  for ( ; x < 7; ++x) {
+    result -= 1 / x;
+  }
+  x -= 1.0 / 2.0;
+  xx = 1.0 / x;
+  xx2 = xx * xx;
+  xx4 = xx2 * xx2;
+  result += log(x) + (1./24.) * xx2 - (7.0/960.0) * xx4 + (31.0/8064.0) * xx4
+      * xx2 - (127.0/30720.0) * xx4 * xx4;
+  return result;
 }

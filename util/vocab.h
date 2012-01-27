@@ -34,6 +34,15 @@ class Vocab {
   void Merge(const Vocab& vocab);
   int size() const { return index_.size(); }
 
+  // Turn the vector of indices into a text sentence.
+  string ToText(const vector<int>& sentence) const;
+
+  // Read and write vocabularies to disk. Read() will delete the current
+  // vocabulary, and returns false if the file can't be read or if it contains
+  // duplicate entries.
+  bool Read(const string& filename);
+  void Write(const string& filename) const;
+
  private:
   // Maps words to integers
   unordered_map<string, int> index_;

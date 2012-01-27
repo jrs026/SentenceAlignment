@@ -3,66 +3,97 @@
 
 // This class contains an implementation of IBM Model 1 for word alignment. 
 
+#include <iostream>
+#include <string>
+#include <utility>
 #include <vector>
 #include <tr1/unordered_map>
-#include <utility>
 
+#include "alignment_models/packed_trie.h"
 #include "util/parallel_corpus.h"
 #include "util/vocab.h"
 
-typedef std::pair<int, int> WordPair;
-
-// Hash function for the T-Table.
-// TODO: If std::size_t is 8 bytes, this works well. If not, 
-struct WordPairHash {
-  std::size_t operator()(const WordPair& wp) const {
-    return (static_cast<std::size_t>(wp.first) << sizeof(std::size_t) * 4)
-        + wp.second;
-  }
-};
+using std::string;
+using std::vector;
 
 class Model1 {
  public:
   typedef ParallelCorpus::DocumentPair DocumentPair;
   typedef ParallelCorpus::Sentence Sentence;
-  // TODO: Describe the storage for expected counts.
-  typedef std::tr1::unordered_map<WordPair, double, WordPairHash> TTable;
 
-  Model1() {}
-  ~Model1() {}
+  // Alpha is the symmetric dirichlet prior on the t-table probabilities.
+  Model1(double alpha = 1.0) : alpha_(alpha) {}
+  ~Model1() {
+    delete t_table_;
+    delete expected_counts_;
+  }
 
   // Initialize the data structures for the given corpus. (for now, just the
   // global parameter vector). The T-Table is set to have uniform probabilities.
-  void InitDataStructures(const ParallelCorpus& pc);
+  void InitDataStructures(const vector<const ParallelCorpus*>& pc,
+                          const Vocab& total_source_vocab,
+                          const Vocab& total_target_vocab);
+  // Initialize the data structures from a printed t-table and return the
+  // vocabularies.
+  void InitFromFile(const string& filename, Vocab* source_vocab,
+      Vocab* target_vocab);
+  // Initialize the data structures from a binary t-table and vocabulary files.
+  void InitFromBinaryFile(const string& t_table_file,
+                          const string& source_vocab_file,
+                          const string& target_vocab_file,
+                          Vocab* source_vocab,
+                          Vocab* target_vocab);
+
   
-  // Returns the probability of the target sentence pair given the source.
+  // Returns the probability of the target sentence given the source.
   double ScorePair(const Sentence& source, const Sentence& target) const;
+  // Returns the probability of the sentence pair and the best alignment.
+  double ViterbiScorePair(const Sentence& source, const Sentence& target) const;
+
+  // Compute the percentage of target words "covered" by some source word
+  // (log p(t|s) must be greater than log_word_cutoff for some s).
+  // If covered_unk is true, unknown words will be considered covered.
+  // If ignored_unk is true, unknown words will not be considered in the
+  // percentage of covered words (overridden by covered_unk).
+  double ComputeCoverage(const Sentence& source, const Sentence& target,
+      double log_word_cutoff, bool covered_unk, bool ignored_unk) const;
 
   // Clear (or initialize) the expected counts from the last E-Step.
   void ClearExpectedCounts();
   // Make an update to the expected counts from this sentence pair and return
   // the probability p(t|s). The weight of the example is in the log domain.
   double EStep(const Sentence& source, const Sentence& target, double weight);
-  // Update the parameters based on the expected counts.
-  void MStep();
+  // Update the parameters based on the expected counts. If variational is true,
+  // the variational M-Step will be used.
+  void MStep(bool variational);
+
+  // Print the t-table to the given stream in a human readable format using the
+  // given vocabularies.
+  void PrintTTable(const Vocab& source_vocab, const Vocab& target_vocab,
+      std::ostream& out) const;
+
+  // Write the TTable in a binary format and the vocabularies to a
+  // human readable format.
+  void WriteBinary(const string& t_table_file,
+                   const string& source_vocab_file,
+                   const string& target_vocab_file,
+                   const Vocab& source_vocab,
+                   const Vocab& target_vocab) const;
+
+  // Access and modify the expected counts
+  PackedTrie* mutable_counts() { return expected_counts_; }
+  // Access the probabilities
+  const PackedTrie& t_table() const { return *t_table_; }
  
  private:
-  // Used for accessing entries in a TTable. It is assumed that all of the
-  // entries are already present.
-  inline double& lookup(TTable* table, int source_word, int target_word) {
-    return (*table)[std::make_pair(source_word, target_word)];
-  }
-  inline const double& lookup(
-      const TTable* table, int source_word, int target_word) const {
-    return table->find(std::make_pair(source_word, target_word))->second;
-  }
+  const double alpha_;
   // Sizes of the source and target vocabularies, set during InitDataStructures.
   int source_vocab_size_;
   int target_vocab_size_;
   // The T-Table, holds log p(t|s).
-  TTable t_table_;
+  PackedTrie* t_table_;
   // Holds the expected counts for the E-Step.
-  TTable expected_counts_;
+  PackedTrie* expected_counts_;
 };
 
 #endif

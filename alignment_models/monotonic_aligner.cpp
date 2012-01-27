@@ -1,11 +1,67 @@
 #include "alignment_models/monotonic_aligner.h"
 
 #include <algorithm>
+#include <utility>
 
 #include "util/math_util.h"
 
-using std::vector;
 using std::numeric_limits;
+using std::pair;
+using std::set;
+using std::vector;
+
+namespace Alignment {
+
+void PairsFromAlignmentOps(const vector<AlignmentOperation>& alignment,
+    set<pair<int, int> >* pairs) {
+  int i = 0;
+  int j = 0;
+  pairs->clear();
+  for (int a = 0; a < alignment.size(); ++a) {
+    if (alignment.at(a) == ALIGNOP_MATCH) {
+      pairs->insert(std::make_pair(i, j));
+    }
+    UpdatePositions(alignment.at(a), false, &i, &j);
+  }
+}
+
+void CompareAlignments(const vector<AlignmentOperation>& true_alignment,
+    const vector<AlignmentOperation>& proposed_alignment,
+    double* true_positives, double* proposed_positives,
+    double* total_positives) {
+  set<pair<int, int> > true_pairs, proposed_pairs;
+  PairsFromAlignmentOps(true_alignment, &true_pairs);
+  PairsFromAlignmentOps(proposed_alignment, &proposed_pairs);
+  CompareAlignments(true_pairs, proposed_pairs, true_positives,
+      proposed_positives, total_positives);
+}
+
+void CompareAlignments(const set<pair<int, int> >& true_pairs,
+    const vector<AlignmentOperation>& proposed_alignment,
+    double* true_positives, double* proposed_positives,
+    double* total_positives) {
+  set<pair<int, int> > proposed_pairs;
+  PairsFromAlignmentOps(proposed_alignment, &proposed_pairs);
+  CompareAlignments(true_pairs, proposed_pairs, true_positives,
+      proposed_positives, total_positives);
+}
+
+void CompareAlignments(const set<pair<int, int> >& true_pairs,
+    const set<pair<int, int> >& proposed_pairs,
+    double* true_positives, double* proposed_positives,
+    double* total_positives) {
+  *proposed_positives += proposed_pairs.size();
+  *total_positives += true_pairs.size();
+  
+  set<pair<int, int> >::const_iterator it;
+  for (it = proposed_pairs.begin(); it != proposed_pairs.end(); ++it) {
+    if (true_pairs.find(*it) != true_pairs.end()) {
+      (*true_positives)++;
+    }
+  }
+}
+
+}  // end namespace Alignment
 
 template<uint8_t order>
 MonotonicAligner<order>::MonotonicAligner(uint8_t max_chunk_size)
@@ -113,8 +169,8 @@ double MonotonicAligner<order>::ForwardBackward(
     sink_state[i] = 0;
   }
   /*
-  std::cout << "Alpha pass sum: " << exp(Z) << "\t"
-      << "Beta pass sum: " << exp((*betas)(sink_state)) << std::endl;
+  std::cout << "Alpha pass sum: " << Z << "\t"
+      << "Beta pass sum: " << (*betas)(sink_state) << std::endl;
   */
   delete alphas, betas;
   return Z;
@@ -157,6 +213,7 @@ double MonotonicAligner<order>::Align(
       }
     }
   }
+  //std::cout << "Best total score: " << best_total_score << std::endl;
 
   vector<AlignmentOperation> alignment;
   // Retrace the best path
@@ -166,7 +223,7 @@ double MonotonicAligner<order>::Align(
     for (AlignmentOperation i = 0; i < max_alignment_op_; ++i) {
       GetSourceState(sink_state, i, &source_state);
       if (IsValid(source_state, *sequence_pair) 
-          || (MathUtil::ApproxEqual((*best_score)(sink_state),
+          && (MathUtil::ApproxEqual((*best_score)(sink_state),
                 (*best_score)(source_state)
                 + sequence_pair->GetScore(source_state, i)))) {
         sink_state = source_state;
@@ -180,6 +237,7 @@ double MonotonicAligner<order>::Align(
     }
   }
   std::reverse(alignment.begin(), alignment.end());
+  sequence_pair->set_alignment(alignment);
   return best_total_score;
 }
 

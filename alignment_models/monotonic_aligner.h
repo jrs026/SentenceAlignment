@@ -9,6 +9,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <set>
 #include <vector>
 
 #include "boost/multi_array.hpp"
@@ -19,6 +20,8 @@
 #define ALIGNOP_INSERT 1
 #define ALIGNOP_MATCH 2 
 
+using std::pair;
+using std::set;
 using std::vector;
 
 // An alignment operation includes the basic insertion/deletion/substitution
@@ -34,13 +37,13 @@ namespace Alignment {
       bool reversed, T* input_pos, T* output_pos) {
     int update = (reversed ? -1 : 1);
     switch (align_op) {
-      case 0: // 1:0 (Deletion)
+      case ALIGNOP_DELETE: // 1:0 (Deletion)
         *input_pos += update;
         break;
-      case 1: // 0:1 (Insertion)
+      case ALIGNOP_INSERT: // 0:1 (Insertion)
         *output_pos += update;
         break;
-      case 2: // 1:1 (Substitution)
+      case ALIGNOP_MATCH: // 1:1 (Substitution)
         *input_pos += update;
         *output_pos += update;
         break;
@@ -49,6 +52,25 @@ namespace Alignment {
         exit(-1);
     }
   }
+
+  // Convert a sequence of alignment operations into source/target index pairs.
+  void PairsFromAlignmentOps(const vector<AlignmentOperation>& alignment,
+      set<pair<int, int> >* pairs);
+  // Gather the statistics needed to compute precision/recall from the proposed
+  // and true alignments.
+  void CompareAlignments(const vector<AlignmentOperation>& true_alignment,
+      const vector<AlignmentOperation>& proposed_alignment,
+      double* true_positives, double* proposed_positives,
+      double* total_positives);
+  void CompareAlignments(const set<pair<int, int> >& true_pairs,
+      const vector<AlignmentOperation>& proposed_alignment,
+      double* true_positives, double* proposed_positives,
+      double* total_positives);
+  void CompareAlignments(const set<pair<int, int> >& true_pairs,
+      const set<pair<int, int> >& proposed_pairs,
+      double* true_positives, double* proposed_positives,
+      double* total_positives);
+
 }  // end namespace
 
 // A sequence pair is the generic object that the monotonic aligner operates on.
