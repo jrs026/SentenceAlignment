@@ -35,8 +35,8 @@ class HMMAligner {
   ~HMMAligner() {
     delete t_table_;
     delete expected_counts_;
-    delete distortion_params_;
-    delete distortion_counts_;
+    delete[] distortion_params_;
+    delete[] distortion_counts_;
   }
 
   // Initialize the data structures for the given corpus. (for now, just the
@@ -63,6 +63,12 @@ class HMMAligner {
   // given vocabularies.
   void PrintTTable(const Vocab& source_vocab, const Vocab& target_vocab,
       std::ostream& out) const;
+  // Print the distortion parameters
+  void PrintDistortionCosts(const Vocab& source_vocab,
+      const Vocab& target_vocab, std::ostream& out) const;
+  // Print both the t-table and the distortion probabilities
+  void PrintModel(const Vocab& source_vocab, const Vocab& target_vocab,
+      std::ostream& out) const;
 
   // Access and modify the expected counts
   PackedTrie* mutable_counts() { return expected_counts_; }
@@ -71,6 +77,7 @@ class HMMAligner {
 
   // Accessors for some member variables
   double null_word_prob() const { return null_word_prob_; }
+  int window_size() const { return window_size_; }
 
   // Accessor functions for the distortion probabilities and expected counts.
   // When attempting to access values outside of the window, these functions

@@ -4,7 +4,6 @@
 #include <limits>
 
 #include "alignment_models/packed_trie.h"
-#include "util/math_util.h"
 
 using std::endl;
 using std::vector;
@@ -45,11 +44,9 @@ double AlignedDocumentPair<order>::GetScore(
     // Substitution
     if ((*cached_pair_scores_)[i1][o1] == UNDEFINED_SCORE) {
       cost = log(alignment_prior_) + source_costs_->at(i1)
-          + log(math_util::Poisson(doc_pair_->first.at(i1).size(),
-                                   doc_pair_->second.at(o1).size()))
+          + LengthCost(doc_pair_->first.at(i1).size(),
+                       doc_pair_->second.at(o1).size())
           + model1_->ScorePair(doc_pair_->first.at(i1), doc_pair_->second.at(o1));
-          //+ model1_->ViterbiScorePair(doc_pair_->first.at(i1), doc_pair_->second.at(o1));
-          //+ target_costs_->at(o1);
       (*cached_pair_scores_)[i1][o1] = cost;
     } else {
       cost = (*cached_pair_scores_)[i1][o1];
@@ -93,8 +90,8 @@ double AlignedDocumentPair<order>::GetScoreAndUpdate(
     // Substitution
     (*posteriors_)[i1][o1] = expected_prob
         + log(alignment_prior_) + source_costs_->at(i1)
-        + log(math_util::Poisson(doc_pair_->first.at(i1).size(),
-                                 doc_pair_->second.at(o1).size()));
+        + LengthCost(doc_pair_->first.at(i1).size(),
+                     doc_pair_->second.at(o1).size());
     //std::cout << i1 << " " << o1 << " " << (*posteriors_)[i1][o1] << std::endl;
   }
   return cost;
@@ -211,6 +208,9 @@ double DocumentAligner<order>::EM(bool variational, int max) {
   double total_likelihood = 0.0;
   for (int i = 0; i < max; ++i) {
     double likelihood = aligner_->ForwardBackward(aligned_pairs_.at(i));
+//    std::cout << aligned_pairs_.at(i)->doc_pair_->first.size() << " "
+//        << aligned_pairs_.at(i)->doc_pair_->second.size() << " "
+//        << likelihood << endl;
     aligned_pairs_.at(i)->UpdateExpectedCounts(likelihood);
     total_likelihood += likelihood;
     aligned_pairs_.at(i)->ClearCachedScores();
@@ -224,17 +224,24 @@ template<uint8_t order>
 void DocumentAligner<order>::Test(int max, double* precision, double* recall,
     double* f1, std::ostream& out) {
   assert(max <= aligned_pairs_.size());
-  double true_positives = 0.0;
-  double proposed_positives = 0.0;
-  double total_positives = 0.0;
+  double t_true_positives = 0.0;
+  double t_proposed_positives = 0.0;
+  double t_total_positives = 0.0;
+  int sentence_pairs = 0;
   for (int i = 0; i < max; ++i) {
     // TODO: Temporary, this will cause too much redundant work in general
     aligned_pairs_.at(i)->ClearCachedScores();
 
     aligner_->Align(aligned_pairs_.at(i));
-    Alignment::CompareAlignments(pc_->GetAlignment(i),
+    double true_positives = 0.0;
+    double proposed_positives = 0.0;
+    double total_positives = 0.0;
+    Alignment::CompareAlignments(pc_->GetAlignment(i), pc_->GetPartialAlignment(i),
         aligned_pairs_.at(i)->alignment(), &true_positives, &proposed_positives,
         &total_positives);
+    t_true_positives += true_positives;
+    t_proposed_positives += proposed_positives;
+    t_total_positives += total_positives;
 
     // Debug output, if a stream is provided.
     if (out.good()) {
@@ -265,8 +272,10 @@ void DocumentAligner<order>::Test(int max, double* precision, double* recall,
     }
   }
 
-  *precision = true_positives / proposed_positives;
-  *recall = true_positives / total_positives;
+  std::cout << "Sentence pairs: " << t_proposed_positives << std::endl;
+
+  *precision = t_true_positives / t_proposed_positives;
+  *recall = t_true_positives / t_total_positives;
   *f1 = 2 * (((*precision) * (*recall)) / ((*precision) + (*recall)));
 }
 

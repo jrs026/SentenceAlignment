@@ -13,6 +13,7 @@
 #include "boost/array.hpp"
 #include "alignment_models/model1.h"
 #include "alignment_models/monotonic_aligner.h"
+#include "util/math_util.h"
 #include "util/nullbuf.h"
 #include "util/parallel_corpus.h"
 
@@ -71,6 +72,16 @@ class AlignedDocumentPair : public SequencePair<order> {
   }
 
  private:
+  // The cost for generating a target sentence of length t using a source
+  // sentences of length s
+  inline double LengthCost(int s, int t) const {
+    double ratio = (double) s / (double) t;
+    //if ((ratio > 2.5) || (ratio < (1.0 / 2.5))) {
+    //  return log(math_util::Poisson(s, t)) - 1e100;
+    //}
+    return log(math_util::Poisson(s, t));
+  }
+
   const DocumentPair* doc_pair_;
   double alignment_prior_;
   // Source and target language model costs.
@@ -114,6 +125,7 @@ class DocumentAligner {
 
   // Check the accuracy of the aligner on the parallel corpus. Only look at the
   // first (max) document pairs.
+  // TODO: Evaluate based on partial alignments
   void Test(int max, double* precision, double* recall, double* f1,
       std::ostream& out = cnull);
 
@@ -133,6 +145,7 @@ class DocumentAligner {
   }
 
  private:
+  // Creates unigram language models for the source and target side.
   void CreateLanguageModels();
   double SourceLMCost(const Sentence& sentence) const;
   double TargetLMCost(const Sentence& sentence) const;

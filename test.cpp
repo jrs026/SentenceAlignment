@@ -10,6 +10,7 @@
 
 #include "alignment_models/document_aligner.h"
 #include "alignment_models/edit_distance.h"
+#include "alignment_models/hmm_aligner.h"
 #include "alignment_models/model1.h"
 #include "alignment_models/monotonic_aligner.h"
 #include "util/math_util.h"
@@ -102,12 +103,12 @@ void ReadLinksFile(const string& links_file,
     int i = 0;
     for (tokenizer::iterator it = line_tokenizer.begin();
          it != line_tokenizer.end(); ++it) {
-      if (i == 1) {
+      if (i == 0) {
         titles->push_back(*it);
       }
       ++i;
     }
-    assert(i == 2);
+    assert(i == 3);
   }
   in.close();
 }
@@ -129,40 +130,123 @@ int main(int argc, char** argv) {
   target_files.push_back("data/dev_en_2009.tok");
   source_files.push_back("data/dev_es_2010.tok");
   target_files.push_back("data/dev_en_2010.tok");
-  //source_files.push_back("data/europarl_10k_es.tok");
-  //target_files.push_back("data/europarl_10k_en.tok");
-  //source_files.push_back("data/europarl-v6.es-en.es.tok");
-  //target_files.push_back("data/europarl-v6.es-en.en.tok");
+  source_files.push_back("data/europarl_10k_es.tok");
+  target_files.push_back("data/europarl_10k_en.tok");
+  source_files.push_back("data/europarl-v6.es-en.es.tok");
+  target_files.push_back("data/europarl-v6.es-en.en.tok");
 
   // Determine which tests are run.
+  bool urdu_wiki_test = true;
   bool naacl_wiki_test = false;
   bool build_m1_filter = false;
   bool filter_sentences_test = false;
-  bool create_turk_csvs = true;
+  bool create_turk_csvs = false;
   bool document_aligner_test = false;
+  bool hmm_test = false;
   bool model1_test = false;
   bool edit_distance_test = false;
 
   // Parameters for the tests
-  double m1_prior = 1.1;
-  bool stemming = false;
+  double m1_prior = 1.001;
+  bool stemming = true;
+  double max_length_ratio = 2.5;
   vector<string> langs;
-  //langs.push_back("bn");
-  //langs.push_back("hi");
-  //langs.push_back("ml");
-  //langs.push_back("ta");
-  //langs.push_back("te");
-  langs.push_back("ur");
+  vector<double> cutoffs;
+  //langs.push_back("bn"); cutoffs.push_back(0.5);
+  //langs.push_back("hi"); cutoffs.push_back(0.5?);
+  //langs.push_back("ml"); cutoffs.push_back(0.4);
+  //langs.push_back("ta"); cutoffs.push_back(0.45);
+  //langs.push_back("te"); cutoffs.push_back(0.5);
+  langs.push_back("ur"); cutoffs.push_back(0.575);
 
   // For filter_sentences_test and create_turk_csvs
-  double cutoff = 0.0001;
-  double log_word_cutoff = log(0.05);
+  double log_word_cutoff = log(0.01);
   bool covered_unk = true;
   bool ignored_unk = false;
-  int min_candidates = 5; // Minimum # of candidate targets
-  int candidates_per_task = 10;
+  int min_candidates = 0; // Minimum # of candidate targets
+  int candidates_per_question = 10;
+  int questions_per_task = 10 - 2;
+  double cost_per_task = 0.6; // For determining the cost of annotating an article
+  int min_segment_length = 5;
 
   cout.precision(4);
+  if (urdu_wiki_test) {
+    int m1_iterations = 0;
+    int doc_iterations = 5;
+    bool is_variational = false;
+    bool poisson_lm = true;
+
+    if (stemming) {
+      pc.SetSourceStemming(true);
+    }
+
+    if (!pc.ReadPartiallyAlignedPairs(
+            "data/urdu.dev.source",
+            "data/urdu.dev.target",
+            "data/urdu.dev.al")) {
+      cerr << "Error reading wiki documents." << endl;
+      exit(-1);
+    }
+    int labeled_max = pc.size();
+    int doc_max = pc.size();
+    string base = "/home/hltcoe/jsmith/wiki/indian-data/";
+    if (!pc.ReadParallelData(
+            base + "ur-en/training_dict.ur-en.ur",
+            base + "ur-en/training_dict.ur-en.en")) {
+      cerr << "Error reading wiki documents." << endl;
+      exit(-1);
+    }
+
+    cout << "Using " << pc.size() << " documents:" << endl;
+    DocumentAligner<0> aligner(&pc, 0.2, m1_prior, poisson_lm);
+    for (int i = 0; i < m1_iterations; ++i) {
+      cout << "Parallel Sentence EM Iteration " << i + 1 << endl;
+      Model1* m1 = aligner.MutableModel1();
+      for (int j = doc_max; j < pc.size(); ++j) {
+        if ((pc.GetDocPair(j).first.size() != 1) 
+          || (pc.GetDocPair(j).second.size() != 1)) {
+          cout << "Document " << j << " missing sentences" << endl;
+        }
+        m1->EStep(pc.GetDocPair(j).first.at(0),
+                  pc.GetDocPair(j).second.at(0), 0.0);
+      }
+      m1->MStep(is_variational);
+    }
+    cout << "Finished parallel sentence EM" << endl;
+
+    for (double lambda = 1e-12; lambda >= 1e-12; lambda /= 10) {
+    //for (double lambda = 3 - (2 * sqrt(2)); lambda < 1.0; lambda += 1.0) {
+      cout << endl << "Lambda = " << lambda << endl;
+      aligner.SetLambda(lambda);
+      double precision, recall, f1;
+      aligner.Test(labeled_max, &precision, &recall, &f1);
+      cout << "Iteration 0"
+           << ":\tPrecision: " << precision * 100 
+           << "\tRecall: " << recall * 100
+           << "\tF1: " << f1 * 100 << endl;
+      for (int i = 0; i < doc_iterations; ++i) {
+        /*
+        Model1* m1 = aligner.MutableModel1();
+        for (int j = doc_max; j < pc.size(); ++j) {
+          if ((pc.GetDocPair(j).first.size() != 1) 
+            || (pc.GetDocPair(j).second.size() != 1)) {
+            cout << "Document " << j << " missing sentences" << endl;
+          }
+          m1->EStep(pc.GetDocPair(j).first.at(0),
+                    pc.GetDocPair(j).second.at(0), 0.0);
+        }*/
+        
+        cout << aligner.EM(is_variational, doc_max) << endl;
+        aligner.Test(labeled_max, &precision, &recall, &f1);
+        cout << "Iteration " << i + 1
+             << ":\tPrecision: " << precision * 100 
+             << "\tRecall: " << recall * 100
+             << "\tF1: " << f1 * 100 << endl;
+      }
+    }
+    cout << endl;
+  }
+
   if (naacl_wiki_test) {
     int m1_iterations = 2;
     int doc_iterations = 2;
@@ -344,6 +428,7 @@ int main(int argc, char** argv) {
       score_types.push_back("st_coverage");
       score_types.push_back("ts_coverage");
       score_types.push_back("coverage");
+      score_types.push_back("length_ratio");
       vector<double> pos_scores(score_types.size(), 0.0);
       vector<double> neg_scores(score_types.size(), 0.0);
       // Iterate over the different references.
@@ -380,20 +465,22 @@ int main(int argc, char** argv) {
             const Sentence& st_target = st_pc.GetDocPair(j).second.at(0);
             const Sentence& ts_source = ts_pc.GetDocPair(j).first.at(0);
             int target_size = st_target.size();
+            double ratio = (double) source_size / target_size;
+            if (ratio < 1.0) {
+              ratio = 1.0 / ratio;
+            }
+            /*
             double st_m1_score = math_util::Poisson(source_size, target_size)
                 * exp(st_m1.ScorePair(st_source, st_target) / target_size);
             double ts_m1_score = math_util::Poisson(target_size, source_size)
                 * exp(ts_m1.ScorePair(ts_source, ts_target) / source_size);
-                /*
             double st_m1_score_v = math_util::Poisson(source_size, target_size)
                 * exp(st_m1.ViterbiScorePair(st_source, st_target) / target_size);
             double ts_m1_score_v = math_util::Poisson(target_size, source_size)
                 * exp(ts_m1.ViterbiScorePair(ts_source, ts_target) / source_size);
                 */
-            /*
             double st_m1_score = 0.0;
             double ts_m1_score = 0.0;
-            */
             double st_m1_score_v = 0.0;
             double ts_m1_score_v = 0.0;
             double st_cov = st_m1.ComputeCoverage(st_pc.GetDocPair(i).first.at(0),
@@ -410,9 +497,11 @@ int main(int argc, char** argv) {
               pos_scores[3] += ts_m1_score_v;
               pos_scores[4] += st_cov;
               pos_scores[5] += ts_cov;
-              pos_scores[6] += st_cov + ts_cov;
-              //if (st_cov + ts_cov >= cutoff) {
-              if (((st_m1_score + ts_m1_score) / 2) >= cutoff) {
+              pos_scores[6] += (st_cov + ts_cov) / 2.0;
+              pos_scores[7] += ratio;
+              if (((st_cov + ts_cov) / 2.0 >= cutoffs[l])
+                  && (ratio < max_length_ratio)) {
+              //if (((st_m1_score + ts_m1_score) / 2) >= cutoff) {
                 ++true_pos;
               }
             } else {
@@ -423,9 +512,11 @@ int main(int argc, char** argv) {
               neg_scores[3] += ts_m1_score_v;
               neg_scores[4] += st_cov;
               neg_scores[5] += ts_cov;
-              neg_scores[6] += st_cov + ts_cov;
-              //if (st_cov + ts_cov >= cutoff) {
-              if (((st_m1_score + ts_m1_score) / 2) >= cutoff) {
+              neg_scores[6] += (st_cov + ts_cov) / 2.0;
+              neg_scores[7] += ratio;
+              if (((st_cov + ts_cov) / 2.0 >= cutoffs[l])
+                  && (ratio < max_length_ratio)) {
+              //if (((st_m1_score + ts_m1_score) / 2) >= cutoff) {
                 ++false_pos;
               }
             }
@@ -467,11 +558,12 @@ int main(int argc, char** argv) {
       cout << "Finished reading Model 1 files" << endl;
       
       string wiki_base = "/home/hltcoe/jsmith/wiki/data/";
-      string links_file = wiki_base + langs[l] + "/" + langs[l] + "-en100.links";
+      string links_file = "/home/hltcoe/jsmith/wiki/" + langs[l] + "_links";
       vector<string> titles;
       ReadLinksFile(links_file, &titles);
       int total_pos = 0;
       int total_neg = 0;
+      int total_questions = 0;
       int total_tasks = 0;
       int total_source_sents = 0;
       int total_target_sents = 0;
@@ -484,6 +576,7 @@ int main(int argc, char** argv) {
         ofstream out(pair_file.c_str());
         int pos = 0;
         int neg = 0;
+        int questions = 0;
         int tasks = 0;
         int source_sents = 0;
         int target_sents = 0;
@@ -510,25 +603,38 @@ int main(int argc, char** argv) {
         for (int i = 0; i < st_pc.GetDocPair(0).first.size(); ++i) {
           vector<pair<int, double> > candidates;
           const Sentence& st_source = st_pc.GetDocPair(0).first.at(i);
+          if (st_source.size() < min_segment_length) {
+            continue;
+          }
           const Sentence& ts_target = ts_pc.GetDocPair(0).second.at(i);
-          int source_size = st_source.size();
           for (int j = 0; j < st_pc.GetDocPair(0).second.size(); ++j) {
             const Sentence& st_target = st_pc.GetDocPair(0).second.at(j);
+            if (st_target.size() < min_segment_length) {
+              continue;
+            }
             const Sentence& ts_source = ts_pc.GetDocPair(0).first.at(j);
-            int target_size = st_target.size();
-            double st_m1_score = math_util::Poisson(source_size, target_size)
-                * exp(st_m1.ScorePair(st_source, st_target) / target_size);
-            double ts_m1_score = math_util::Poisson(target_size, source_size)
-                * exp(ts_m1.ScorePair(ts_source, ts_target) / source_size);
+
+            double ratio = (double) st_source.size() / st_target.size();
+            if (ratio < 1.0) {
+              ratio = 1.0 / ratio;
+            }
+            if (ratio >= max_length_ratio) {
+              continue;
+            }
+
+            double st_cov = st_m1.ComputeCoverage(st_source, st_target,
+                log_word_cutoff, covered_unk, ignored_unk);
+            double ts_cov = ts_m1.ComputeCoverage(ts_source, ts_target,
+                log_word_cutoff, covered_unk, ignored_unk);
 
             candidates.push_back(make_pair(j, (double)
-                                           (st_m1_score + ts_m1_score) / 2));
+                                           (st_cov + ts_cov) / 2.0));
           }
           // sort
           sort(candidates.begin(), candidates.end(), CandidateSort);
           // Always keep the top n
           for (int c = min_candidates; c < candidates.size(); ++c) {
-            if (candidates[c].second < cutoff) {
+            if (candidates[c].second < cutoffs[l]) {
               candidates.resize(c);
             }
           }
@@ -539,7 +645,7 @@ int main(int argc, char** argv) {
           std::random_shuffle(candidates.begin(), candidates.end());
           while (candidates.size() > 0) {
             int num_candidates =
-                std::min<int>(candidates.size(), candidates_per_task);
+                std::min<int>(candidates.size(), candidates_per_question);
             out << title << endl;
             out << num_candidates << endl;
             out << st_pc.source_vocab().ToText(st_source) << endl;
@@ -551,20 +657,27 @@ int main(int argc, char** argv) {
               candidates.pop_back();
               num_candidates--;
             }
-            ++tasks;
+            ++questions;
           }
+        }
+        tasks = questions / questions_per_task;
+        if ((questions % questions_per_task) > 0) {
+          tasks++;
         }
         source_sents = st_pc.GetDocPair(0).first.size();
         target_sents = st_pc.GetDocPair(0).second.size();
         total_pos += pos;
         total_neg += neg;
+        total_questions += questions;
         total_tasks += tasks;
         total_source_sents += source_sents;
         total_target_sents += target_sents;
         cout << "Positive pairs: " << pos << endl;
         cout << "All possible pairs: " << pos + neg << " ("
             << 100.0 - (((double) pos / (pos + neg)) * 100) << "% pruning)" << endl;
+        cout << "Questions: " << questions << endl;
         cout << "Tasks: " << tasks << endl;
+        cout << "Cost for annotating this article: " << tasks * cost_per_task << endl;
         cout << "Source sentences: " << source_sents << endl;
         cout << "Target sentences: " << target_sents << endl;
         cout << endl;
@@ -575,7 +688,10 @@ int main(int argc, char** argv) {
       cout << "All possible pairs: " << total_pos + total_neg << " ("
           << 100.0 - (((double) total_pos / (total_pos + total_neg)) * 100)
           << "% pruning)" << endl;
-      cout << "Total Tasks: " << total_tasks << endl;
+      cout << "Total questions: " << total_questions << endl;
+      cout << "Total tasks: " << total_tasks << endl;
+      cout << "Cost for annotating all articles: "
+          << total_tasks * cost_per_task << endl;
       cout << "Total source sentences: " << total_source_sents << endl;
       cout << "Total target sentences: " << total_target_sents << endl;
       cout << endl;
@@ -623,23 +739,53 @@ int main(int argc, char** argv) {
     }
   }
 
+  // TODO: Alignment test which includes Model 1 and the HMM. Write a
+  // constructor for the HMM which takes the T-Table from a Model 1 object (will
+  // probably need to create the abstract aligner class)
+
+  if (hmm_test) {
+    if (pc.ReadParallelData(source_files[3], target_files[3])) {
+      HMMAligner hmm(1.1, 1.01, 0.2, 5);
+      vector<const ParallelCorpus*> pcs;
+      pcs.push_back(&pc);
+      hmm.InitDataStructures(pcs, pc.source_vocab(), pc.target_vocab());
+      hmm.ClearExpectedCounts();
+      hmm.PrintDistortionCosts(pc.source_vocab(), pc.target_vocab(), cout);
+      for (int i = 0; i < 5; ++i) {
+        double likelihood = 0.0;
+        for (int d = 0; d < pc.size(); ++d) {
+          const ParallelCorpus::DocumentPair& doc_pair = pc.GetDocPair(d);
+          const ParallelCorpus::Sentence& source = doc_pair.first.at(0);
+          const ParallelCorpus::Sentence& target = doc_pair.second.at(0);
+          double current_likelihood = hmm.EStep(source, target);
+          likelihood += current_likelihood;
+        }
+        cout << likelihood << endl;
+        hmm.MStep(false);
+        hmm.ClearExpectedCounts();
+        hmm.PrintDistortionCosts(pc.source_vocab(), pc.target_vocab(), cout);
+      }
+    } else {
+      cerr << "Error reading document pair" << endl;
+    }
+  }
+
   if (model1_test) {
-    if (pc.ReadAlignedPairs("data/source.txt", "data/target.txt")) {
-      const ParallelCorpus::DocumentPair& doc_pair = pc.GetDocPair(0);
-      Model1 m1;
+    //pc.clear(); // TODO
+    if (pc.ReadParallelData(source_files[3], target_files[3])) {
+      Model1 m1(1.1);
       vector<const ParallelCorpus*> pcs;
       pcs.push_back(&pc);
       m1.InitDataStructures(pcs, pc.source_vocab(), pc.target_vocab());
       m1.ClearExpectedCounts();
-      for (int i = 0; i < 100; ++i) {
+      for (int i = 0; i < 5; ++i) {
         double likelihood = 0.0;
-        for (int s = 0; s < doc_pair.first.size(); ++s) {
-          for (int t = 0; t < doc_pair.second.size(); ++t) {
-            const ParallelCorpus::Sentence& source = doc_pair.first.at(s);
-            const ParallelCorpus::Sentence& target = doc_pair.second.at(t);
-            double weight = log(1.0 / (1.0 + (1 * abs(s - t))));
-            likelihood += m1.EStep(source, target, weight) * exp(weight);
-          }
+        for (int d = 0; d < pc.size(); ++d) {
+          const ParallelCorpus::DocumentPair& doc_pair = pc.GetDocPair(d);
+          const ParallelCorpus::Sentence& source = doc_pair.first.at(0);
+          const ParallelCorpus::Sentence& target = doc_pair.second.at(0);
+          double current_likelihood = m1.EStep(source, target, 0.0);
+          likelihood += current_likelihood;
         }
         cout << likelihood << endl;
         m1.MStep(false);

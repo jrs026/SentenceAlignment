@@ -14,13 +14,29 @@ void HMMAligner::InitDataStructures(const vector<const ParallelCorpus*>& pcs,
   target_vocab_size_ = total_target_vocab.size();
   t_table_ = new PackedTrie();
   t_table_->InitializeFromCorpus(pcs, total_source_vocab, total_target_vocab);
-  //expected_counts_ = new PackedTrie(*t_table_);
-  expected_counts_ = new PackedTrie();
-  expected_counts_->InitializeFromCorpus(pcs, total_source_vocab, total_target_vocab);
+  expected_counts_ = new PackedTrie(*t_table_);
 
   // The distortion parameters must store values for -window_size_ to
   // window_size.
   distortion_params_ = new double[(window_size_ * 2) + 1];
+  /*
+  double uniform_prob = log((1.0 - exp(null_word_prob_))
+      / ((window_size_ * 2.0) + 1.0));
+  for (int i = 0; i < (window_size_ * 2) + 1; ++i) {
+    distortion_params_[i] = uniform_prob;
+  }*/
+  // TODO: Temporary initialization
+  double sum = exp(null_word_prob_);
+  for (int i = 0; i < (window_size_ * 2) + 1; ++i) {
+    distortion_params_[i] = 1.0;
+    if (i == window_size_ + 1) {
+      distortion_params_[i] += window_size_;
+    }
+    sum += distortion_params_[i];
+  }
+  for (int i = 0; i < (window_size_ * 2) + 1; ++i) {
+    distortion_params_[i] = log(distortion_params_[i] / sum);
+  }
   distortion_counts_ = new double[(window_size_ * 2) + 1];
 
   ClearExpectedCounts();
@@ -72,7 +88,7 @@ double HMMAligner::ScorePair(const Sentence& source, const Sentence& target) con
   return result;
 }
 
-// TODO
+// TODO Unchanged from M1
 double HMMAligner::ViterbiScorePair(const Sentence& source, const Sentence& target)
     const {
   double result = 0.0;
@@ -113,29 +129,32 @@ double HMMAligner::EStep(const Sentence& source, const Sentence& target) {
       double t_prob = t_table_->Prob(source[s], target[t]);
 
       double total_inc_prob = -numeric_limits<double>::max();
-      for (int prev_s = -1; prev_s < source.size(); ++prev_s) {
-        // The previous source word at the beginning of the alphas is fixed
-        // to be -1 with prob 1
-        if (t == 0) {
-          total_inc_prob = trans_probs->at(prev_s, s) + t_prob;
-          break;
+      if (t == 0) {
+        // The previous source word at the beginning of the sentence is fixed
+        // to be -1 with probability 1.
+        total_inc_prob = trans_probs->at(-1, s) + t_prob;
+      } else {
+        total_inc_prob = trans_probs->at(-1, s) + alphas->at(-1, t - 1, true);
+        for (int prev_s = 0; prev_s < source.size(); ++prev_s) {
+          double inc_prob = trans_probs->at(prev_s, s)
+              + MathUtil::LogAdd(alphas->at(prev_s, t - 1, false),
+                                 alphas->at(prev_s, t - 1, true));
+          MathUtil::LogPlusEQ(total_inc_prob, inc_prob);
         }
-        double inc_prob = trans_probs->at(prev_s, s) + t_prob
-            + MathUtil::LogAdd(alphas->at(prev_s, t - 1, false),
-                               alphas->at(prev_s, t - 1, true));
-        MathUtil::LogPlusEQ(total_inc_prob, inc_prob);
+        total_inc_prob += t_prob;
       }
       alphas->at(s, t, false) = total_inc_prob;
     }
     // Transitions into null states.
     double null_prob = t_table_->Prob(0, target[t]) + null_word_prob_;
     if (t > 0) {
-      for (int s = -1; s < source.size(); ++s) {
-        alphas->at(s, t, true) = null_word_prob_ + MathUtil::LogAdd(
+      alphas->at(-1, t, true) = null_prob + alphas->at(-1, t - 1, true);
+      for (int s = 0; s < source.size(); ++s) {
+        alphas->at(s, t, true) = null_prob + MathUtil::LogAdd(
             alphas->at(s, t - 1, true), alphas->at(s, t - 1, false));
       }
     } else {
-      alphas->at(-1, t, true) = null_word_prob_;
+      alphas->at(-1, t, true) = null_prob;
     }
   }
   // Find the total probability by summing the last row.
@@ -152,34 +171,67 @@ double HMMAligner::EStep(const Sentence& source, const Sentence& target) {
     betas->at(s, target.size() - 1, false) = 0.0;
     betas->at(s, target.size() - 1, true) = 0.0;
   }
-  for (int t = target.size() - 1; t >= 1; --t) {
+  // Result from the reverse direction
+  double beta_result = -numeric_limits<double>::max();
+  for (int t = target.size() - 1; t >= 0; --t) {
     // Transitions into non-null states
     for (int s = 0; s < source.size(); ++s) {
       double t_prob = t_table_->Prob(source[s], target[t]);
       double beta = betas->at(s, t, false);
-      for (int prev_s = -1; prev_s < source.size(); ++prev_s) {
-        double inc_prob = trans_probs->at(prev_s, s) + t_prob + beta;
-        MathUtil::LogPlusEQ(betas->at(prev_s, t - 1, false), inc_prob); 
-        MathUtil::LogPlusEQ(betas->at(prev_s, t - 1, true), inc_prob); 
+
+      if (t > 0) {
+        MathUtil::LogPlusEQ(betas->at(-1, t - 1, true),
+            trans_probs->at(-1, s) + t_prob + beta); 
         // Updates to expected transition counts
-        MathUtil::LogPlusEQ(dist_counts(s - prev_s), inc_prob
-            + MathUtil::LogAdd(alphas->at(prev_s, t - 1, false),
-                               alphas->at(prev_s, t - 1, true))
-            );
+        MathUtil::LogPlusEQ(dist_counts(s - (-1)), trans_probs->at(-1, s)
+            + t_prob + beta + alphas->at(-1, t - 1, true) - result);
+        for (int prev_s = 0; prev_s < source.size(); ++prev_s) {
+          double inc_prob = trans_probs->at(prev_s, s) + t_prob + beta;
+          MathUtil::LogPlusEQ(betas->at(prev_s, t - 1, false), inc_prob); 
+          MathUtil::LogPlusEQ(betas->at(prev_s, t - 1, true), inc_prob); 
+          // Updates to expected transition counts
+          MathUtil::LogPlusEQ(dist_counts(s - prev_s), inc_prob
+              + MathUtil::LogAdd(alphas->at(prev_s, t - 1, false),
+                                 alphas->at(prev_s, t - 1, true))
+              - result);
+        }
+      } else {
+        // Only one update needs to be made for the beginning of the sentence
+        MathUtil::LogPlusEQ(dist_counts(s - (-1)), trans_probs->at(-1, s)
+            + t_prob + beta - result);
       }
     }
     // Transitions into null states.
-    double null_prob = t_table_->Prob(0, target[t]) + null_word_prob_;
-    for (int s = -1; s < source.size(); ++s) {
-      double inc_prob = null_word_prob_ + betas->at(s, t, true);
-      MathUtil::LogPlusEQ(betas->at(s, t - 1, true), inc_prob);
-      MathUtil::LogPlusEQ(betas->at(s, t - 1, false), inc_prob);
+    if (t > 0) {
+      double null_prob = t_table_->Prob(0, target[t]) + null_word_prob_;
+      for (int s = -1; s < (int) source.size(); ++s) {
+        double inc_prob = null_prob + betas->at(s, t, true);
+        MathUtil::LogPlusEQ(betas->at(s, t - 1, true), inc_prob);
+        if (s != -1) {
+          MathUtil::LogPlusEQ(betas->at(s, t - 1, false), inc_prob);
+        }
+      }
     }
     // Updates to the emission counts
+    double null_value = alphas->at(-1, t, true) + betas->at(-1, t, true);
     for (int s = 0; s < source.size(); ++s) {
-      double value = alphas->at(s, t, false); // TODO
+      double value = alphas->at(s, t, false) + betas->at(s, t, false);
+      MathUtil::LogPlusEQ(expected_counts_->Lookup(source[s], target[t]),
+          value - result);
+      MathUtil::LogPlusEQ(null_value,
+          alphas->at(s, t, true) + betas->at(s, t, true));
+    }
+    MathUtil::LogPlusEQ(expected_counts_->Lookup(0, target[t]), null_value - result);
+  }
+  for (int s = -1; s < (int) source.size(); ++s) {
+    MathUtil::LogPlusEQ(beta_result, betas->at(s, 0, true)
+        + alphas->at(s, 0, true));
+    if (s != -1) {
+      MathUtil::LogPlusEQ(beta_result, betas->at(s, 0, false)
+          + alphas->at(s, 0, false));
     }
   }
+ // std::cout << result << " " << beta_result << std::endl;
 
   delete trans_probs, alphas, betas;
   return result;
@@ -214,7 +266,8 @@ void HMMAligner::MStep(bool variational) {
       MathUtil::LogPlusEQ(distortion_sum, dist_counts(i));
     }
     for (int i = -window_size_; i <= window_size_; ++i) {
-      dist_probs(i) = dist_counts(i) - distortion_sum;
+      dist_probs(i) = exp(dist_counts(i) - distortion_sum);
+      dist_probs(i) = log((1.0 - exp(null_word_prob_)) * dist_probs(i));
     }
   } else {
     // Variational Update
@@ -226,6 +279,25 @@ void HMMAligner::PrintTTable(const Vocab& source_vocab,
                              const Vocab& target_vocab,
                              std::ostream& out) const {
   t_table_->Print(source_vocab, target_vocab, out);
+}
+
+void HMMAligner::PrintDistortionCosts(const Vocab& source_vocab,
+                                      const Vocab& target_vocab,
+                                      std::ostream& out) const {
+  out << -window_size_ << " or lower: "
+      << exp(dist_probs(-window_size_)) << std::endl;
+  for (int i = -window_size_ + 1; i < window_size_; ++i) {
+    out << i << ": " << exp(dist_probs(i)) << std::endl;
+  }
+  out << window_size_ << " or higher: "
+      << exp(dist_probs(window_size_)) << std::endl;
+}
+
+void HMMAligner::PrintModel(const Vocab& source_vocab,
+                            const Vocab& target_vocab,
+                            std::ostream& out) const {
+  PrintTTable(source_vocab, target_vocab, out);
+  PrintDistortionCosts(source_vocab, target_vocab, out);
 }
 
 HMMLattice::HMMLattice(int source_length, int target_length)
@@ -252,14 +324,23 @@ TransProbs::TransProbs(int source_length, const HMMAligner& hmm)
   for (int i = 0; i < source_length_ + 1; ++i) {
     trans_probs_[i] = new double[source_length_];
   }
+  int window_size = hmm.window_size();
 
   for (int prev = -1; prev < source_length_; ++prev) {
-    double total_prob = hmm.null_word_prob();
+    double total_prob = exp(hmm.null_word_prob());
     for (int next = 0; next < source_length_; ++next) {
-      MathUtil::LogPlusEQ(total_prob, hmm.dist_probs(next - prev));
+      double p = exp(hmm.dist_probs(next - prev));
+      if ((next - prev) <= -window_size) {
+        p /= prev - window_size + 1;
+      } else if ((next - prev) >= window_size) {
+        p /= source_length_ - (prev + window_size);
+      }
+      trans_probs_[prev+1][next] = p;
+      total_prob += p;
     }
     for (int next = 0; next < source_length_; ++next) {
-      trans_probs_[prev+1][next] = hmm.dist_probs(next - prev) - total_prob;
+      trans_probs_[prev+1][next] = 
+        log(trans_probs_[prev+1][next] / total_prob);
     }
   }
 }

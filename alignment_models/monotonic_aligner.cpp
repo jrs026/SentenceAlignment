@@ -37,11 +37,25 @@ void CompareAlignments(const vector<AlignmentOperation>& true_alignment,
 }
 
 void CompareAlignments(const set<pair<int, int> >& true_pairs,
+    const PartialAlignment& partial_alignment,
     const vector<AlignmentOperation>& proposed_alignment,
     double* true_positives, double* proposed_positives,
     double* total_positives) {
   set<pair<int, int> > proposed_pairs;
   PairsFromAlignmentOps(proposed_alignment, &proposed_pairs);
+  // Remove the unknowns from the proposed pairs
+  set<pair<int, int> >::iterator it;
+  //int old_size = proposed_pairs.size();
+  for (it = proposed_pairs.begin(); it != proposed_pairs.end(); ) {
+    if (indeterminate(partial_alignment[it->first][it->second])) {
+      proposed_pairs.erase(it++);
+    } else {
+      ++it;
+    }
+  }
+  //std::cout << "Removed " << old_size - proposed_pairs.size()
+  //    << " pairs" << std::endl;
+
   CompareAlignments(true_pairs, proposed_pairs, true_positives,
       proposed_positives, total_positives);
 }
@@ -207,7 +221,7 @@ double MonotonicAligner<order>::Align(
     (*best_score)(sink_state) = value;
     if ((sink_state[0] == sequence_pair->GetInputLength())
         && (sink_state[1] == sequence_pair->GetOutputLength())) {
-      if (best_total_score < value) {
+      if (best_total_score <= value) {
         best_total_score = value;
         best_final_state = sink_state;
       }
@@ -233,6 +247,7 @@ double MonotonicAligner<order>::Align(
     }
     if (alignment.size() == old_alignment_size) {
       std::cerr << "Error while backtracing the alignment" << std::endl;
+      assert(alignment.size() != old_alignment_size);
       exit(-1);
     }
   }

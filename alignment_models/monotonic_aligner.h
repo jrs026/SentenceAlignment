@@ -8,12 +8,14 @@
 // kinds of models (discriminative or generative).
 
 #include <cstdlib>
+#include <cinttypes>
 #include <iostream>
 #include <set>
 #include <vector>
 
-#include "boost/multi_array.hpp"
-#include "boost/array.hpp"
+#include <boost/array.hpp>
+#include <boost/multi_array.hpp>
+#include <boost/logic/tribool.hpp>
 
 // Some definitions of alignment operations that are used by other classes.
 #define ALIGNOP_DELETE 0
@@ -24,11 +26,17 @@ using std::pair;
 using std::set;
 using std::vector;
 
+using boost::logic::tribool;
+using boost::logic::indeterminate;
+
 // An alignment operation includes the basic insertion/deletion/substitution
 // operations of edit distance, as well as m:n operations.
 typedef uint16_t AlignmentOperation;
 
+typedef vector<vector<tribool> > PartialAlignment;
+
 namespace Alignment {
+
   // Update the positions based on the alignment operation taken. If reversed is
   // true, update the positions by going backwards instead of forwards.
   // T must be a numeric type.
@@ -63,6 +71,7 @@ namespace Alignment {
       double* true_positives, double* proposed_positives,
       double* total_positives);
   void CompareAlignments(const set<pair<int, int> >& true_pairs,
+      const PartialAlignment& partial_alignment,
       const vector<AlignmentOperation>& proposed_alignment,
       double* true_positives, double* proposed_positives,
       double* total_positives);

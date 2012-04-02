@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include <boost/logic/tribool.hpp>
+
 #include "alignment_models/monotonic_aligner.h"
 #include "util/vocab.h"
 
@@ -18,11 +20,18 @@ using std::set;
 using std::string;
 using std::vector;
 
+using boost::logic::tribool;
+using boost::logic::indeterminate;
+
 class ParallelCorpus {
  public:
   typedef vector<int> Sentence;
   typedef vector<Sentence> Document;
   typedef std::pair<Document, Document> DocumentPair;
+
+  // Partial alignments are stored as a grid. For each source/target pair, it's
+  // either true, false, or unknown.
+  typedef vector<vector<tribool> > PartialAlignment;
 
   ParallelCorpus(bool use_lowercase) : use_lowercase_(use_lowercase),
     source_stemming_(false), target_stemming_(false), stemming_length_(4) {}
@@ -40,6 +49,10 @@ class ParallelCorpus {
   // Read document pairs along with their alignments.
   bool ReadAlignedPairs(const string& source_file, const string& target_file,
       const string& alignment_file);
+  // Read document pairs with partial alignments from mechanical turk.
+  bool ReadPartiallyAlignedPairs(const string& source_file,
+                                 const string& target_file,
+                                 const string& alignment_file);
   // Read documents which are known to be parallel, storing each pair as a
   // document.
   bool ReadParallelData(const string& source_file, const string& target_file);
@@ -77,6 +90,9 @@ class ParallelCorpus {
   inline const set<pair<int, int> >& GetAlignment(int i) const {
     return alignments_.at(i);
   }
+  inline const PartialAlignment& GetPartialAlignment(int i) const {
+    return partial_alignments_.at(i);
+  }
   inline int size() const { return doc_pairs_.size(); }
 
   // Vocabulary accessors
@@ -108,6 +124,14 @@ class ParallelCorpus {
   // unless alignments_ is the same size as doc_pairs_ after all alignments are
   // read.
   bool ReadAlignmentFile(const string& filename);
+  // This also fills alignments_ with the known alignments in addition to
+  // populating partial_alignments_.
+  bool ReadPartialAlignmentFile(const string& filename);
+
+  // Initialize a partial alignment grid with "indeterminant" for all sentence
+  // pairs.
+  void InitPartialAlignment(const DocumentPair& doc_pair,
+                            PartialAlignment* partial_alignment) const;
 
   inline void Stem(string& word) const {
     word.resize(stemming_length_);
@@ -123,6 +147,7 @@ class ParallelCorpus {
   // Source and target documents, as well as a possible alignment between them.
   vector<DocumentPair> doc_pairs_;
   vector<set<pair<int, int> > > alignments_;
+  vector<PartialAlignment> partial_alignments_;
   // Vocabularies for the source and target docs.
   Vocab source_vocab_;
   Vocab target_vocab_;

@@ -72,6 +72,18 @@ bool ParallelCorpus::ReadAlignedPairs(const string& source_file,
   return false;
 }
 
+bool ParallelCorpus::ReadPartiallyAlignedPairs(
+    const string& source_file,
+    const string& target_file,
+    const string& alignment_file) {
+  if (ReadDocumentPairs(source_file, target_file)) {
+    if (ReadPartialAlignmentFile(alignment_file)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool ParallelCorpus::ReadParallelData(const string& source_file,
                                       const string& target_file) {
   typedef boost::tokenizer<boost::char_separator<char> > tokenizer;
@@ -275,8 +287,9 @@ void ParallelCorpus::DiagonalBaseline(
     }
     // This alignment is possibly incomplete, but for now that doesn't
     // matter for evaluation.
-    Alignment::CompareAlignments(alignments_.at(i), diagonal_alignment,
-        &true_positives, &proposed_positives, &total_positives);
+    // TODO: fix
+    //Alignment::CompareAlignments(alignments_.at(i), diagonal_alignment,
+    //    &true_positives, &proposed_positives, &total_positives);
   }
   *precision = true_positives / proposed_positives;
   *recall = true_positives / total_positives;
@@ -435,7 +448,7 @@ bool ParallelCorpus::ReadAlignmentFile(const string& filename) {
 
   typedef boost::tokenizer<boost::char_separator<char> > tokenizer;
   boost::char_separator<char> sep(" \t");
-  std::string line;
+  string line;
 
   set<pair<int, int> > alignment;
   while (getline(in, line)) {
@@ -466,10 +479,94 @@ bool ParallelCorpus::ReadAlignmentFile(const string& filename) {
     return false;
   }
   return true;
+}
 
+bool ParallelCorpus::ReadPartialAlignmentFile(const string& filename) {
+  std::ifstream in(filename.c_str());
+  if (!in.good()) {
+    return false;
+  }
+
+  typedef boost::tokenizer<boost::char_separator<char> > tokenizer;
+  boost::char_separator<char> tab_sep("\t", "", boost::keep_empty_tokens);
+  boost::char_separator<char> space_sep(" ");
+  string line;
+
+  set<pair<int, int> > alignment;
+  PartialAlignment partial_alignment;
+  int doc_index = 0;
+  InitPartialAlignment(doc_pairs_.at(doc_index), &partial_alignment);
+  while (getline(in, line)) {
+    vector<std::string> tokens;
+    tokenizer line_tokenizer(line, tab_sep);
+    for (tokenizer::iterator it = line_tokenizer.begin();
+         it != line_tokenizer.end(); ++it) {
+      string token = *it;
+      tokens.push_back(token);
+    }
+    if (tokens.size() == 3) {
+      // (source_index)\t(0 or more positive target indices)\t(0 or more
+      // negative target indices)
+      int source = atoi(tokens[0].c_str());
+      vector<int> pos_targets, neg_targets;
+      tokenizer index_tokenizer(tokens[1], space_sep);
+      for (tokenizer::iterator it = index_tokenizer.begin();
+           it != index_tokenizer.end(); ++it) {
+        pos_targets.push_back(atoi(it->c_str()));
+      }
+      index_tokenizer.assign(tokens[2], space_sep);
+      for (tokenizer::iterator it = index_tokenizer.begin();
+           it != index_tokenizer.end(); ++it) {
+        neg_targets.push_back(atoi(it->c_str()));
+      }
+      for (int t = 0; t < neg_targets.size(); ++t) {
+        int target = neg_targets.at(t);
+        partial_alignment[source][target] = false;
+      }
+      // If we encounter at least one positive alignment for the source
+      // sentence, we consider all target sentences as false. Otherwise, we only
+      // consider the seen target sentences as false.
+      // TODO
+      /*
+      if (pos_targets.size() > 0) {
+        for (int t = 0; t < doc_pairs_.at(doc_index).second.size(); ++t) {
+          partial_alignment[source][t] = false;
+        }
+      } */
+      for (int t = 0; t < pos_targets.size(); ++t) {
+        int target = pos_targets.at(t);
+        partial_alignment[source][target] = true;
+        alignment.insert(std::make_pair(source, target));
+      }
+    } else {
+      // An empty line indicates a document boundary
+      alignments_.push_back(alignment);
+      alignment.clear();
+      partial_alignments_.push_back(partial_alignment);
+      doc_index++;
+      if (doc_index < doc_pairs_.size()) {
+        InitPartialAlignment(doc_pairs_.at(doc_index), &partial_alignment);
+      }
+    }
+  }
+
+  in.close();
+  if (alignments_.size() != doc_pairs_.size()) {
+    return false;
+  }
+  return true;
 }
 
 void ParallelCorpus::SetStemmingLength(int stemming_length) {
   assert(stemming_length > 0);
   stemming_length_ = stemming_length;
+}
+
+void ParallelCorpus::InitPartialAlignment(
+    const DocumentPair& doc_pair, PartialAlignment* partial_alignment) const {
+  partial_alignment->clear();
+  for (int i = 0; i < doc_pair.first.size(); ++i) {
+    vector<tribool> alignment_vector(doc_pair.second.size(), indeterminate);
+    partial_alignment->push_back(alignment_vector);
+  }
 }

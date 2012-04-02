@@ -87,9 +87,9 @@ class Model1 {
  
  private:
   const double alpha_;
-  // Sizes of the source and target vocabularies, set during InitDataStructures.
-  int source_vocab_size_;
-  int target_vocab_size_;
+  // Vocabulary objects for the source and target sides
+  const Vocab* source_vocab_;
+  const Vocab* target_vocab_;
   // The T-Table, holds log p(t|s).
   PackedTrie* t_table_;
   // Holds the expected counts for the E-Step.

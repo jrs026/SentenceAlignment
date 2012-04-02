@@ -10,8 +10,8 @@ using std::numeric_limits;
 void Model1::InitDataStructures(const vector<const ParallelCorpus*>& pcs,
                                 const Vocab& total_source_vocab,
                                 const Vocab& total_target_vocab) {
-  source_vocab_size_ = total_source_vocab.size();
-  target_vocab_size_ = total_target_vocab.size();
+  source_vocab_ = &total_source_vocab;
+  target_vocab_ = &total_target_vocab;
   t_table_ = new PackedTrie();
   t_table_->InitializeFromCorpus(pcs, total_source_vocab, total_target_vocab);
   expected_counts_ = new PackedTrie(*t_table_);
@@ -22,8 +22,8 @@ void Model1::InitFromFile(const string& filename, Vocab* source_vocab,
   t_table_ = new PackedTrie();
   t_table_->Read(filename, source_vocab, target_vocab);
   expected_counts_ = new PackedTrie(*t_table_);
-  source_vocab_size_ = source_vocab->size();
-  target_vocab_size_ = target_vocab->size();
+  source_vocab_ = source_vocab;
+  target_vocab_ = target_vocab;
 }
 
 void Model1::InitFromBinaryFile(const string& t_table_file,
@@ -36,8 +36,8 @@ void Model1::InitFromBinaryFile(const string& t_table_file,
   source_vocab->Read(source_vocab_file);
   target_vocab->Read(target_vocab_file);
   expected_counts_ = new PackedTrie(*t_table_);
-  source_vocab_size_ = source_vocab->size();
-  target_vocab_size_ = target_vocab->size();
+  source_vocab_ = source_vocab;
+  target_vocab_ = target_vocab;
 }
 
 double Model1::ScorePair(const Sentence& source, const Sentence& target) const {
@@ -86,10 +86,10 @@ double Model1::ComputeCoverage(const Sentence& source, const Sentence& target,
   double coverage = 0.0;
   int target_size = target.size();
   for (int t = 0; t < target.size(); ++t) {
-    if (covered_unk && (target[t] > target_vocab_size_)) {
+    if (covered_unk && (target[t] > target_vocab_->size())) {
       ++coverage;
       continue;
-    } else if (ignored_unk && (target[t] > target_vocab_size_)) {
+    } else if (ignored_unk && (target[t] > target_vocab_->size())) {
       --target_size;
       continue;
     }
@@ -101,6 +101,11 @@ double Model1::ComputeCoverage(const Sentence& source, const Sentence& target,
     for (int s = 0; s < source.size(); ++s) {
       double p = t_table_->Prob(source[s], target[t]);
       if (p > log_word_cutoff) {
+        ++coverage;
+        break;
+      }
+      // Check for exact match
+      if (source_vocab_->GetWord(s) == target_vocab_->GetWord(t)) {
         ++coverage;
         break;
       }
@@ -158,7 +163,7 @@ void Model1::MStep(bool variational) {
           << std::endl;
       assert(0);
     }
-    for (int s = 0; s < source_vocab_size_; ++s) {
+    for (int s = 0; s < source_vocab_->size(); ++s) {
       double sum = -numeric_limits<double>::max();
       int min = expected_counts_->Offset(s);
       int max = expected_counts_->Offset(s+1);
