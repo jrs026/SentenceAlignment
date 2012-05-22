@@ -280,6 +280,35 @@ void DocumentAligner<order>::Test(int max, double* precision, double* recall,
 }
 
 template<uint8_t order>
+void DocumentAligner<order>::ExtractSentences(int max,
+    const string& parallel_output_location) const {
+  std::ofstream source_out(parallel_output_location + ".source");
+  std::ofstream target_out(parallel_output_location + ".target");
+  for (int i = 0; i < max; ++i) {
+    aligned_pairs_.at(i)->ClearCachedScores();
+
+    aligner_->Align(aligned_pairs_.at(i));
+
+    set<pair<int, int> > proposed_pairs;
+    Alignment::PairsFromAlignmentOps(aligned_pairs_.at(i)->alignment(),
+                                     &proposed_pairs);
+    set<pair<int, int> >::iterator it;
+    while (proposed_pairs.size() > 0) {
+      it = proposed_pairs.begin();
+      pc_->PrintSentence(pc_->GetDocPair(i).first.at(it->first),
+                         pc_->source_vocab(), source_out);
+      source_out << endl;
+      pc_->PrintSentence(pc_->GetDocPair(i).second.at(it->second),
+                         pc_->target_vocab(), target_out);
+      target_out << endl;
+      proposed_pairs.erase(it);
+    }
+  }
+  source_out.close();
+  target_out.close();
+}
+
+template<uint8_t order>
 void DocumentAligner<order>::CreateLanguageModels() {
   int source_tokens = 0;
   vector<int> source_counts(pc_->source_vocab().size());

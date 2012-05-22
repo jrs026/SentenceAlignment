@@ -129,6 +129,9 @@ class DocumentAligner {
   void Test(int max, double* precision, double* recall, double* f1,
       std::ostream& out = cnull);
 
+  // Align all documents in the collection and output them to this location
+  void ExtractSentences(int max, const string& parallel_output_location) const;
+
   // Access the underlying word alignment model.
   const Model1& GetModel1() const {
     return model1_;
