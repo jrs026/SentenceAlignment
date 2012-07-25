@@ -9,20 +9,21 @@ import sys
 from optparse import OptionParser
 
 import maxent
+import vocab
 
 def main():
   parser = OptionParser()
 
   parser.add_option("-p", "--parallel_data", dest="training_file",
-      default="../data/euro_esen_10k",
+      default="data/euro_esen_10k",
       help="Parallel data, expecting \".source\" and \".target\"")
 
   parser.add_option("-c", "--comparable_data", dest="comp_data",
-      default="../data/es_dev",
+      default="data/es_dev",
       help="Annotated comparable data, expecting \".source\", \".target\", and \".alignment\"")
 
   parser.add_option("-r", "--raw-data", dest="raw_data",
-      default="../data/esen_docs_small",
+      default="data/esen_docs_small",
       help="Raw comparable data, expecting \".source\" and \".target\"")
 
   parser.add_option("-t", "--t-table", dest="m1_data", default="small.model",
@@ -41,26 +42,36 @@ def main():
   parser.add_option("--prob-floor", type="float", dest="prob_floor",
       default=1e-4, help="Lowest probability value for LM and M1")
 
+  parser.add_option("--max_iterations", type="int", dest="max_iterations",
+      default=20, help="Maximum number of L-BFGS iterations")
+
   parser.add_option("--l2-norm", type="float", dest="l2_norm", default="2.0",
       help="L2 normalizing value for the Maxent model")
 
   (opts, args) = parser.parse_args()
 
-  source_parallel = read_lines(opts.training_file + '.source')
-  target_parallel = read_lines(opts.training_file + '.target')
-  (source_docs, target_docs, alignments) = read_comp_data(opts.comp_data)
-  (raw_source, raw_target) = read_comp_data(opts.raw_data)
-
-  t_lm = create_lm(target_parallel, opts)
-
-  m1 = read_m1_data(opts.m1_data)
+  # Read available data
+  source_vocab = vocab.Vocab()
+  target_vocab = vocab.Vocab()
+  if opts.training_file:
+    source_parallel = read_text(opts.training_file + '.source', source_vocab)
+    target_parallel = read_text(opts.training_file + '.target', target_vocab)
+    t_lm = create_lm(target_parallel, opts)
+  if opts.comp_data:
+    (source_docs, target_docs, alignments) = read_comp_data(
+        opts.comp_data, source_vocab, target_vocab)
+  if opts.raw_data:
+    (raw_source, raw_target) = read_comp_data(
+        opts.raw_data, source_vocab, target_vocab)
+  if opts.m1_data:
+    m1 = read_m1_data(opts.m1_data, source_vocab, target_vocab)
 
   #(train_data, test_data) = create_train_test_data(
   #    me, source_parallel, target_parallel, m1, t_lm, opts)
   comp_data = create_comp_test_data(
       source_docs, target_docs, alignments, m1, t_lm, opts)
   print_feature_stats(comp_data)
-  folds = range(4)
+  folds = range(5)
   for fold in folds:
     comp_test_data = []
     me = maxent.MaxentModel()
@@ -73,45 +84,49 @@ def main():
       else:
         me.add_event(event[0], event[1])
     me.end_add_event()
-    me.train(50, "lbfgs", opts.l2_norm)
+    me.train(opts.max_iterations, "lbfgs", opts.l2_norm)
     parallel_eval(me, comp_test_data)
     
-  # TODO put into opts
-  extract = False
-  if extract:
+  output_data = True
+  if output_data:
     full_me = maxent.MaxentModel()
     full_me.begin_add_event()
     for event in comp_data:
       full_me.add_event(event[0], event[1])
     full_me.end_add_event()
-    full_me.train(50, "lbfgs", opts.l2_norm)
+    full_me.train(opts.max_iterations, "lbfgs", opts.l2_norm)
 
-    for threshold in drange(0.05, 0.96, 0.05):
-      out_file = "data/esen_out_" + str(threshold)
-      extract_sentences(full_me, raw_source, raw_target, out_file, threshold,
-          m1, t_lm, opts)
+    #for threshold in drange(0.05, 0.96, 0.05):
+    threshold = 0.5
+    out_file = "data/esen.0." + str(threshold)
+    extract_sentences(full_me, raw_source, raw_target, out_file, threshold,
+        m1, t_lm, source_vocab, target_vocab, opts)
 
   #print me
   #parallel_eval(me, comp_test_data)
   #parallel_eval(me, test_data)
 
 def extract_sentences(me, raw_source, raw_target, out_file, threshold, 
-    m1_data, t_lm, opts):
+    m1_data, t_lm, source_vocab, target_vocab, opts):
   s_out = open(out_file + '.source', 'w')
   t_out = open(out_file + '.target', 'w')
   for i in xrange(0, len(raw_source)):
     for s_sent in raw_source[i]:
-      s_len = len(s_sent.split())
       for t_sent in raw_target[i]:
-        t_len = len(t_sent.split())
-        len_ratio = t_len / (1.0 * s_len)
+        len_ratio = len(t_sent) / (1.0 * len(s_sent))
         if (len_ratio < 1.0):
           len_ratio = 1.0 / len_ratio
         if (len_ratio < opts.max_len_ratio):
           context = get_features(s_sent, t_sent, m1_data, t_lm, opts)
           if (me.eval(context, 'true') > threshold):
-            s_out.write(s_sent + "\n")
-            t_out.write(t_sent + "\n")
+            source_words = []
+            for s in s_sent:
+              source_words.append(source_vocab.id_lookup(s))
+            target_words = []
+            for t in t_sent:
+              target_words.append(target_vocab.id_lookup(t))
+            s_out.write(' '.join(source_words) + "\n")
+            t_out.write(' '.join(target_words) + "\n")
 
   s_out.close()
   t_out.close()
@@ -120,9 +135,8 @@ def create_lm(sentences, opts):
   total_words = 0.0
   word_probs = {}
   for sentence in sentences:
-    words = sentence.split()
-    total_words += len(words)
-    for word in words:
+    total_words += len(sentence)
+    for word in sentence:
       if not word_probs.get(word):
         word_probs[word] = 0.0
       word_probs[word] += 1.0
@@ -208,9 +222,7 @@ def create_train_test_data(me, source_parallel, target_parallel, m1_data, t_lm,
       neg_examples = 0
       for j in range(i - opts.example_window, i + opts.example_window + 1):
         if ((j >= opts.test_max) and (j < len(target_parallel)) and (j != i)):
-          source_len = len(source.split())
-          target_len = len(target_parallel[j].split())
-          len_ratio = target_len / (1.0 * source_len)
+          len_ratio = len(target_parallel[j]) / (1.0 * len(source))
           if (len_ratio < 1.0):
             len_ratio = 1.0 / len_ratio
           if (len_ratio < opts.max_len_ratio):
@@ -235,7 +247,8 @@ def create_comp_test_data(source_docs, target_docs, alignments,
   for a in alignments:
     a_dict = {}
     for pair in a:
-      a_dict[' '.join(pair.split())] = 1.0
+      (s, t) = pair.split()
+      a_dict[(int(s), int(t))] = 1.0
     a_dicts.append(a_dict)
 
   test_data = []
@@ -244,15 +257,13 @@ def create_comp_test_data(source_docs, target_docs, alignments,
     target_sents = target_docs[i]
     a_dict = a_dicts[i]
     for s,s_sent in enumerate(source_sents):
-      for t, t_sent in enumerate(target_sents):
-        s_len = len(s_sent.split())
-        t_len = len(t_sent.split())
-        len_ratio = t_len / (1.0 * s_len)
+      for t,t_sent in enumerate(target_sents):
+        len_ratio = len(t_sent) / (1.0 * len(s_sent))
         if (len_ratio < 1.0):
           len_ratio = 1.0 / len_ratio
         if (len_ratio < opts.max_len_ratio):
           outcome = 'false'
-          if str(s) + ' ' + str(t) in a_dict:
+          if (s, t) in a_dict:
             outcome = 'true'
           context = get_features(s_sent, t_sent, m1_data, t_lm, opts)
           test_data.append((context, outcome))
@@ -260,10 +271,8 @@ def create_comp_test_data(source_docs, target_docs, alignments,
   return test_data
 
 def get_features(source, target, m1_data, t_lm, opts):
-  source_words = source.split()
-  target_words = target.split()
-  source_len = len(source_words)
-  target_len = len(target_words)
+  source_len = len(source)
+  target_len = len(target)
   len_ratio = target_len / (1.0 * source_len)
   poisson_length = poisson_prob(source_len, target_len)
   
@@ -276,18 +285,18 @@ def get_features(source, target, m1_data, t_lm, opts):
   max_lprob = 0.0
   total_lprob = 0.0
   lm_prob = math.log(poisson_prob(t_lm[0], target_len))
-  for t in target_words:
+  for t in target:
     t_score = 0.0
     max_t_score = 0.0
     lm_prob += math.log(t_lm[1].get(t, opts.prob_floor))
-    for s in source_words:
-      prob = m1_data.get(s + ' ' + t, opts.prob_floor)
+    for s in source:
+      prob = m1_data.get((s, t), opts.prob_floor)
       t_score += prob
       if (prob > max_t_score):
         max_t_score = prob
 
     max_lprob += math.log(max_t_score)
-    total_lprob += math.log(t_score / len(source_words))
+    total_lprob += math.log(t_score / len(source))
     for v in cov_vals:
       if (max_t_score > v):
         target_cov[v] += 1
@@ -313,9 +322,9 @@ def get_features(source, target, m1_data, t_lm, opts):
 
   return context
 
-def read_comp_data(filename):
-  source_docs = read_docs(filename + ".source")
-  target_docs = read_docs(filename + ".target")
+def read_comp_data(filename, source_vocab, target_vocab):
+  source_docs = read_docs(filename + ".source", source_vocab)
+  target_docs = read_docs(filename + ".target", target_vocab)
   if os.path.exists(filename + ".alignment"):
     alignment_docs = read_docs(filename + ".alignment")
     return (source_docs, target_docs, alignment_docs)
@@ -323,7 +332,7 @@ def read_comp_data(filename):
     return (source_docs, target_docs)
 
 # Read documents (or alignments) separated by blank lines
-def read_docs(filename):
+def read_docs(filename, vocab=None):
   docs = []
   current_doc = []
   for line in file(filename):
@@ -332,26 +341,39 @@ def read_docs(filename):
         docs.append(copy.deepcopy(current_doc))
         current_doc = []
     else:
-      current_doc.append(line.strip().lower())
+      if vocab:
+        current_sent = []
+        for token in line.split():
+          current_sent.append(vocab.add_word(token))
+        current_doc.append(current_sent)
+      else:
+        current_doc.append(line.strip())
 
   if len(current_doc) > 0:
     docs.append(current_doc)
   return docs
 
-def read_m1_data(filename):
+def read_m1_data(filename, source_vocab, target_vocab):
   m1_data = {}
   f = open(filename)
   for line in f:
     (s, t, cost) = line.split()
-    m1_data[s + ' ' + t] = float(cost)
-
+    s_index = source_vocab.add_word(s)
+    t_index = target_vocab.add_word(t)
+    m1_data[(s_index, t_index)] = float(cost)
+  f.close()
   return m1_data
 
-def read_lines(filename):
+def read_text(filename, vocab):
+  sents = []
   f = open(filename)
-  lines = f.readlines()
+  for line in f:
+    current_sent = []
+    for token in line.split():
+      current_sent.append(vocab.add_word(token))
+    sents.append(current_sent)
   f.close()
-  return lines
+  return sents
   
 def poisson_prob(mean, actual):
   p = math.exp(-mean)
