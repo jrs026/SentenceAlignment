@@ -1,11 +1,12 @@
 #!/usr/bin/python
-
+import re
 # Stores maps between words and integers for efficiently storing text
 
 class Vocab:
 
   def __init__(self, lowercase=True):
     self.lowercase = lowercase
+    self.re_normalize = re.compile('\s+', re.M | re.S)
     self.word_to_id = {}
     # id_to_word[0] is reserved as the special OOV token
     self.id_to_word = ['__OOV__']
@@ -30,7 +31,7 @@ class Vocab:
     """Add a word to the vocabulary (if it doesn't already exist) and return its
     id.
     """
-    processed_word = word
+    processed_word = self.re_normalize.sub('', word)
     if self.lowercase:
       processed_word = word.lower()
     word_id = self.word_to_id.get(processed_word, -1)

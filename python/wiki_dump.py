@@ -124,6 +124,7 @@ class WikiDump:
           page_id = int(m.group(1))
           if page_id in self.id_to_fullinfo:
             title = self.id_to_fullinfo[page_id][0]
-            yield (title, m.group(2).decode('utf-8'))
+#            yield (title, m.group(2).decode('utf-8'))
+            yield (title, m.group(2))
 
     interwiki.close()

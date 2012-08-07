@@ -1,5 +1,6 @@
 #!/usr/bin/python
 
+import os
 import re
 import sys
 
@@ -12,6 +13,7 @@ import wiki_dump
 import wiki_parser
 
 def main():
+  cwd = os.getcwd()
   parser = OptionParser()
 
   parser.add_option("-c", "--create_dump", dest="dump_file", default="",
@@ -24,6 +26,8 @@ def main():
       help="Location of a previously saved wikitext file")
   parser.add_option("--inter_wiki", dest="interwiki_file", default="",
       help="Location of an interwiki links SQL file")
+  parser.add_option("--iw_out", dest="iw_out", default="",
+      help="Print interwiki links to this file")
   parser.add_option("-l", "--language_code", dest="language_code", default="",
       help="Language code of the target Wikipedia of the interwiki links")
   parser.add_option("--dict_trans", dest="dict_trans", default="",
@@ -31,8 +35,12 @@ def main():
         "The language should be specified as a full name.")
   parser.add_option("--dict_trans_out", dest="dict_trans_out", default="",
       help="Dictionary entries are printed here (tab separated)")
+
+  # For creating document pairs
   parser.add_option("--text_out", dest="text_out", default="",
       help="Output cleaned wikitext to this file")
+  parser.add_option("--iw_in", dest="iw_in", default="",
+      help="Saved interwiki links")
 
   (opts, args) = parser.parse_args()
 
@@ -44,26 +52,23 @@ def main():
   special_page = re.compile('^\S+:')
 
   # TODO: Temporary, many things not handled in the options
-  if opts.text_out:
+  if opts.text_out and opts.iw_in:
+    print "Writing article pairs from", opts.iw_in, "to", opts.text_out
     source_wp = wiki_parser.WikiParser('old_models/es_model.pickle')
     target_wp = wiki_parser.WikiParser('old_models/en_sbreak.pickle')
     source_dump = wiki_dump.WikiDump()
-    source_dump.LoadIndex('data/es_dump.index', 'data/es_dump')
+    source_dump.LoadIndex(cwd + '/data/es_dump.index', cwd + '/data/es_dump')
     print 'Done loading es_dump.index'
     target_dump = wiki_dump.WikiDump()
-    target_dump.LoadIndex('data/en_dump.index', 'data/en_dump')
+    target_dump.LoadIndex(cwd + '/data/en_dump.index', cwd + '/data/en_dump')
     print 'Done loading en_dump.index'
 
-    current_file = 0
-    source_out = open(opts.text_out + '.source.' + str(current_file), 'w')
-    target_out = open(opts.text_out + '.target.' + str(current_file), 'w')
+    source_out = open(opts.text_out + '.source', 'w')
+    target_out = open(opts.text_out + '.target', 'w')
     count = 0
-    title_list = open('data/es-en.links', mode='r')
+    title_list = open(opts.iw_in, mode='r')
     for line in title_list:
-      (target_id, source_title) = line.strip().split('\t')
-      if not target_id.isdigit():
-        continue
-      target_title = target_dump.id_to_fullinfo.get(int(target_id),('',0,0))[0]
+      (target_title, source_title) = line.strip().split('\t')
       if special_page.match(source_title) or special_page.match(target_title):
         continue
       source_wt = source_dump.GetArticle(source_title)
@@ -72,31 +77,32 @@ def main():
         continue
       if re.match('^#REDIREC', source_wt, re.IGNORECASE) or re.match('^#REDIREC', target_wt, re.IGNORECASE):
         continue
-      print source_title, target_title
-      source_out.write('\n'.join(source_wp.ToPlainText(source_wt)).encode('utf-8') + '\n\n')
-      target_out.write('\n'.join(target_wp.ToPlainText(target_wt)).encode('utf-8') + '\n\n')
+      source_sents = source_wp.ToPlainText(source_wt)
+      if len(source_sents) == 0:
+        continue
+      target_sents = target_wp.ToPlainText(target_wt)
+      if len(target_sents) == 0:
+        continue
+      print source_title, "\t\t", target_title
+      source_out.write('\n'.join(source_sents).encode('utf-8') + '\n\n')
+      target_out.write('\n'.join(target_sents).encode('utf-8') + '\n\n')
       count += 1
-      if (count % 10000) == 0:
-        source_out.close()
-        target_out.close()
-        print "Finished writing", opts.text_out + '.' + str(current_file)
-        current_file += 1
-        source_out = open(opts.text_out + '.source.' + str(current_file), 'w')
-        target_out = open(opts.text_out + '.target.' + str(current_file), 'w')
 
-    print count
+    print "Wrote", count, "document pairs"
     source_out.close()
     target_out.close()
 
   if opts.index_file and opts.wiki_file:
     wd.LoadIndex(opts.index_file, opts.wiki_file)
 
-    if opts.interwiki_file and opts.language_code:
+    if opts.interwiki_file and opts.language_code and opts.iw_out:
       iw_file = opts.interwiki_file
       lc = opts.language_code
+      iw_out = open(opts.iw_out, 'w')
       for source_title,target_title in wd.IterateInterwiki(iw_file, lc):
         if not special_page.match(source_title) and not special_page.match(target_title):
-          print source_title + "\t" + target_title
+          iw_out.write(source_title + "\t" + target_title + "\n")
+      iw_out.close()
 
     if opts.dict_trans:
       # The third group will contain the entries

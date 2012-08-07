@@ -13,40 +13,44 @@ import vocab
 
 def main():
   parser = OptionParser()
+  cwd = os.getcwd()
 
   parser.add_option("-p", "--parallel_data", dest="training_file",
-      default="data/euro_esen_10k",
+      default=cwd+"/data/euro_esen_10k",
       help="Parallel data, expecting \".source\" and \".target\"")
 
   parser.add_option("-c", "--comparable_data", dest="comp_data",
-      default="data/es_dev",
+      default=cwd+"/data/es_dev",
       help="Annotated comparable data, expecting \".source\", \".target\", and \".alignment\"")
 
-  parser.add_option("-r", "--raw-data", dest="raw_data",
-      default="data/esen_docs_small",
+  parser.add_option("-r", "--raw_data", dest="raw_data",
+      default=cwd+"/data/esen_docs_small",
       help="Raw comparable data, expecting \".source\" and \".target\"")
 
-  parser.add_option("-t", "--t-table", dest="m1_data", default="small.model",
+  parser.add_option("-t", "--t_table", dest="m1_data", default=cwd+"/data/pruned.model",
       help="Word alignment parameters from some parallel data")
 
-  parser.add_option("-e", "--example-window", dest="example_window", type="int",
+  parser.add_option("-e", "--example_window", dest="example_window", type="int",
       default=3, help="Size of the example window for gathering training data")
 
-  parser.add_option("--length-ratio", type="float", dest="max_len_ratio",
+  parser.add_option("--length_ratio", type="float", dest="max_len_ratio",
       default=3.0, 
       help="Maximum length ratio for sentences to be considered parallel")
 
-  parser.add_option("--test-max", type="int", dest="test_max", default=100,
+  parser.add_option("--test_max", type="int", dest="test_max", default=100,
       help="Number of sentences from the parallel data to use as test data")
 
-  parser.add_option("--prob-floor", type="float", dest="prob_floor",
+  parser.add_option("--prob_floor", type="float", dest="prob_floor",
       default=1e-4, help="Lowest probability value for LM and M1")
 
   parser.add_option("--max_iterations", type="int", dest="max_iterations",
       default=20, help="Maximum number of L-BFGS iterations")
 
-  parser.add_option("--l2-norm", type="float", dest="l2_norm", default="2.0",
+  parser.add_option("--l2_norm", type="float", dest="l2_norm", default="2.0",
       help="L2 normalizing value for the Maxent model")
+
+  parser.add_option("--sent_out", dest="sent_out", default="",
+      help="Extract sentences from the raw documents to this location")
 
   (opts, args) = parser.parse_args()
 
@@ -87,8 +91,7 @@ def main():
     me.train(opts.max_iterations, "lbfgs", opts.l2_norm)
     parallel_eval(me, comp_test_data)
     
-  output_data = True
-  if output_data:
+  if opts.sent_out:
     full_me = maxent.MaxentModel()
     full_me.begin_add_event()
     for event in comp_data:
@@ -98,7 +101,7 @@ def main():
 
     #for threshold in drange(0.05, 0.96, 0.05):
     threshold = 0.5
-    out_file = "data/esen.0." + str(threshold)
+    out_file = opts.sent_out + '.' + str(threshold)
     extract_sentences(full_me, raw_source, raw_target, out_file, threshold,
         m1, t_lm, source_vocab, target_vocab, opts)
 
@@ -110,9 +113,12 @@ def extract_sentences(me, raw_source, raw_target, out_file, threshold,
     m1_data, t_lm, source_vocab, target_vocab, opts):
   s_out = open(out_file + '.source', 'w')
   t_out = open(out_file + '.target', 'w')
+  parallel = 0
   for i in xrange(0, len(raw_source)):
     for s_sent in raw_source[i]:
       for t_sent in raw_target[i]:
+        if len(s_sent) == 0 or len(t_sent) == 0:
+          continue
         len_ratio = len(t_sent) / (1.0 * len(s_sent))
         if (len_ratio < 1.0):
           len_ratio = 1.0 / len_ratio
@@ -125,9 +131,17 @@ def extract_sentences(me, raw_source, raw_target, out_file, threshold,
             target_words = []
             for t in t_sent:
               target_words.append(target_vocab.id_lookup(t))
-            s_out.write(' '.join(source_words) + "\n")
-            t_out.write(' '.join(target_words) + "\n")
+            source = ' '.join(source_words)
+            target = ' '.join(target_words)
+            if len(source) > 0 and len(target) > 0:
+              if ('\n' not in source) and ('\n' not in target):
+                parallel += 1
+                s_out.write(' '.join(source_words) + "\n")
+                t_out.write(' '.join(target_words) + "\n")
+                if (parallel % 10000) == 0:
+                  print 'Wrote', parallel, 'parallel sentences.'
 
+  print 'Finished writing', parallel, 'parallel sentences.'
   s_out.close()
   t_out.close()
 
@@ -284,7 +298,11 @@ def get_features(source, target, m1_data, t_lm, opts):
     target_cov[v] = 0.0
   max_lprob = 0.0
   total_lprob = 0.0
-  lm_prob = math.log(poisson_prob(t_lm[0], target_len))
+  lm_prob = -100
+  try:
+    lm_prob = math.log(poisson_prob(t_lm[0], target_len))
+  except:
+    pass
   for t in target:
     t_score = 0.0
     max_t_score = 0.0
@@ -303,8 +321,14 @@ def get_features(source, target, m1_data, t_lm, opts):
 
   context = []
   context.append(('bias', 1.0))
-  context.append(('poisson_length', math.log(poisson_length) -
-      math.log(poisson_prob(t_lm[0], target_len))))
+  log_poisson = -100
+  poisson_length_feat = -100
+  try:
+    log_poisson = math.log(poisson_length)
+    poisson_length_feat = log_poisson - math.log(poisson_prob(t_lm[0], target_len))
+  except:
+    pass
+  context.append(('poisson_length', poisson_length_feat))
   context.append(('log_ratio', math.log(len_ratio)))
 
   for v in cov_vals:
@@ -316,8 +340,8 @@ def get_features(source, target, m1_data, t_lm, opts):
   context.append(('norm_log_target_prob', total_lprob / target_len))
   context.append(('norm_log_target_max_prob', max_lprob / target_len))
 
-  context.append(('total_model', total_lprob + math.log(poisson_length) - lm_prob))
-  context.append(('norm_total_model', (total_lprob + math.log(poisson_length) -
+  context.append(('total_model', total_lprob + log_poisson - lm_prob))
+  context.append(('norm_total_model', (total_lprob + log_poisson -
       lm_prob) / target_len))
 
   return context
@@ -343,7 +367,7 @@ def read_docs(filename, vocab=None):
     else:
       if vocab:
         current_sent = []
-        for token in line.split():
+        for token in line.strip().split():
           current_sent.append(vocab.add_word(token))
         current_doc.append(current_sent)
       else:

@@ -23,6 +23,8 @@ class WikiParser:
   
   # Requires the location of sentence breaking model
   def __init__(self, sbreak_model_file=None):
+    #self.template_re = re.compile(r'\{(\{|\|)[^{}]*(\}|\|)\}', re.MULTILINE)
+    self.template_re = re.compile(r'\{[^{}]*\}', re.M | re.S)
     if sbreak_model_file:
       self.sbreak_model = nltk.data.load(sbreak_model_file)
     else:
@@ -48,10 +50,10 @@ class WikiParser:
     return output
 
   def WikiToText(self, wikitext):
-    clean_wiki = remove_templates(unescape(wikitext))
+    clean_wiki = unescape(self.RemoveTemplates(wikitext))
     tree = uparser.parseString(title='', raw=clean_wiki)
     ignored_types = ['link']
-    ignored_tags = ['ref']
+    ignored_tags = ['ref', 'math']
     text_nodes = []
     node_stack = deque([tree])
     while len(node_stack) > 0:
@@ -84,16 +86,14 @@ class WikiParser:
 
     return result
 
-    return sentences
-
-# Some utility functions
-def remove_templates(wikitext):
-  old_len = len(wikitext)
-  result = re.sub(r'\{(\{|\|)[^{}]*(\}|\|)\}', '', wikitext, re.MULTILINE)
-  while len(result) != old_len:
-    old_len = len(result)
-    result = re.sub(r'\{(\{|\|)[^{}]*(\}|\|)\}', '', result, re.MULTILINE)
-  return result
+  def RemoveTemplates(self, wikitext):
+    old_len = len(wikitext)
+    #result = re.sub(r'\{(\{|\|)[^{}]*(\}|\|)\}', '', wikitext, re.MULTILINE)
+    result = self.template_re.sub('', wikitext)
+    while len(result) != old_len:
+      old_len = len(result)
+      result = self.template_re.sub('', result)
+    return result
 
 ##
 # Removes HTML or XML character references and entities from a text string.
